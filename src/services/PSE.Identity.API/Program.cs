@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using PSE.Identidade.API.Extensions;
 using PSE.Identity.API.Data;
 using PSE.Identity.API.Extensions;
 using System.Text;
@@ -47,6 +48,7 @@ builder.Services.AddAuthentication(configureOptions: options =>
 builder.Services.AddControllers();
 builder.Services.AddDefaultIdentity<IdentityUser>()
     .AddRoles<IdentityRole>()
+    .AddErrorDescriber<IdentityMessagesPTBR>()
     .AddEntityFrameworkStores<ApplicationDbContext>()
     .AddDefaultTokenProviders();
 

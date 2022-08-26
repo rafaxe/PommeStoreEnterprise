@@ -10,9 +10,8 @@ using System.Text;
 
 namespace PSE.Identity.API.Controllers
 {
-    [ApiController]
     [Route("api/auth")]
-    public class AuthController : Controller
+    public class AuthController : MainController
     {
         private readonly SignInManager<IdentityUser> _signInManager;
         private readonly UserManager<IdentityUser> _userManager;
@@ -31,7 +30,7 @@ namespace PSE.Identity.API.Controllers
         [HttpPost("register")]
         public async Task<ActionResult> Register(UserRegister userRegister)
         {
-            if (!ModelState.IsValid) return BadRequest(ModelState);
+            if (!ModelState.IsValid) return CustomResponse(ModelState);
 
             var user = new IdentityUser
             {
@@ -44,63 +43,88 @@ namespace PSE.Identity.API.Controllers
 
             if (result.Succeeded)
             {
-                await _signInManager.SignInAsync(user, false);
-                return Ok(await GerarJwt(userRegister.Email));
+                return CustomResponse(await GenerateJwt(userRegister.Email));
             }
 
-            return BadRequest(result.Errors);
+            foreach (var error in result.Errors)
+            {
+                AddError(error.Description);
+            }
+
+            return CustomResponse();
         }
 
         [HttpPost("login")]
         public async Task<ActionResult> Login(UserLogin userLogin)
         {
-            if (!ModelState.IsValid) return BadRequest(ModelState);
+            if (!ModelState.IsValid) return CustomResponse(ModelState);
 
             var result = await _signInManager.PasswordSignInAsync(userLogin.Email, userLogin.Password, false, true);
 
             if (result.Succeeded)
             {
-                return Ok(await GerarJwt(userLogin.Email));
+                return CustomResponse(await GenerateJwt(userLogin.Email));
             }
 
-            return BadRequest();
+            if (result.IsLockedOut)
+            {
+                AddError("Usuário temporariamente bloqueado por excesso de tentativas");
+                return CustomResponse();
+            }
+
+            AddError("Usuário ou senha incorreto");
+            return CustomResponse();
         }
 
-        private async Task<UserResponseLogin> GerarJwt(string email)
+        private async Task<UserResponseLogin> GenerateJwt(string email)
         {
-
             var user = await _userManager.FindByEmailAsync(email);
             var claims = await _userManager.GetClaimsAsync(user);
-            var userRolers = await _userManager.GetRolesAsync(user);
+
+            var identityClaims = await GetUserClaim(claims, user);
+            var encodedToken = BuildToken(identityClaims);
+
+            return GetResponseToken(encodedToken, user, claims);
+        }
+
+        private async Task<ClaimsIdentity> GetUserClaim(ICollection<Claim> claims, IdentityUser user)
+        {
+            var userRoles = await _userManager.GetRolesAsync(user);
 
             claims.Add(new Claim(JwtRegisteredClaimNames.Sub, user.Id));
             claims.Add(new Claim(JwtRegisteredClaimNames.Email, user.Email));
             claims.Add(new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()));
             claims.Add(new Claim(JwtRegisteredClaimNames.Nbf, ToUnixEpochDate(DateTime.UtcNow).ToString()));
             claims.Add(new Claim(JwtRegisteredClaimNames.Iat, ToUnixEpochDate(DateTime.UtcNow).ToString(), ClaimValueTypes.Integer64));
-
-            foreach (var useRole in userRolers)
+            foreach (var userRole in userRoles)
             {
-                claims.Add(new Claim("role", useRole));
+                claims.Add(new Claim("role", userRole));
             }
 
             var identityClaims = new ClaimsIdentity();
             identityClaims.AddClaims(claims);
 
+            return identityClaims;
+        }
+
+        private string BuildToken(ClaimsIdentity identityClaims)
+        {
             var tokenHandler = new JwtSecurityTokenHandler();
             var key = Encoding.ASCII.GetBytes(_appSettings.Secret);
-
             var token = tokenHandler.CreateToken(new SecurityTokenDescriptor
             {
                 Issuer = _appSettings.Issuer,
                 Audience = _appSettings.ValidIn,
                 Subject = identityClaims,
                 Expires = DateTime.UtcNow.AddHours(_appSettings.ExpireTimeHour),
-                SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), algorithm: SecurityAlgorithms.HmacSha256Signature)
+                SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)
             });
 
-            var encodedToken = tokenHandler.WriteToken(token);
+            return tokenHandler.WriteToken(token);
+        }
 
+        private UserResponseLogin GetResponseToken(string encodedToken, IdentityUser user, IEnumerable<Claim> claims)
+        {
             return new UserResponseLogin
             {
                 AccessToken = encodedToken,
@@ -113,7 +137,6 @@ namespace PSE.Identity.API.Controllers
                 }
             };
         }
-
         private static long ToUnixEpochDate(DateTime date) =>
             (long)Math.Round((date.ToUniversalTime() - new DateTimeOffset(1970, 1, 1, 0, 0, 0, TimeSpan.Zero)).TotalSeconds);
 
